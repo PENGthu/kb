@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>知识库</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="assets/vue.css">
+  <style>
+    :root{ --theme-color:#c0392b; }
+    .markdown-section{ max-width:880px; }
+    #gate{position:fixed;inset:0;z-index:9999;background:#1c2530;color:#eee;
+      display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:system-ui,sans-serif;}
+    #gate h1{font-size:22px;margin-bottom:4px;} #gate p{color:#9aa7b4;font-size:13px;margin:0 0 18px;}
+    #gate input{padding:10px 14px;width:260px;border:none;border-radius:8px;font-size:15px;}
+    #gate button{margin-top:12px;padding:9px 22px;border:none;border-radius:8px;background:#c0392b;color:#fff;font-size:15px;cursor:pointer;}
+    #gate .err{color:#ff8a80;font-size:13px;height:18px;margin-top:10px;}
+  </style>
+</head>
+<body>
+  <div id="gate">
+    <h1>🔒 知识库</h1>
+    <p>请输入访问口令</p>
+    <input id="pw" type="password" autofocus placeholder="口令" autocomplete="current-password">
+    <button id="go">进入</button>
+    <div class="err" id="err"></div>
+  </div>
+  <div id="app">解锁后加载…</div>
+  <script>
+    const SALT = Uint8Array.from(atob("LnRNXieVYeNKz7a90FyE2w=="), c => c.charCodeAt(0));
+    const ITERS = 250000;
+    let KEY = null;
+    const enc = new TextEncoder(), dec = new TextDecoder();
+
+    async function deriveKey(pw){
+      const base = await crypto.subtle.importKey('raw', enc.encode(pw), 'PBKDF2', false, ['deriveKey']);
+      return crypto.subtle.deriveKey(
+        {name:'PBKDF2', salt:SALT, iterations:ITERS, hash:'SHA-256'},
+        base, {name:'AES-GCM', length:256}, false, ['decrypt']);
+    }
+    function b64buf(s){ return Uint8Array.from(atob(s.trim()), c => c.charCodeAt(0)); }
+    async function decryptText(b64){
+      const raw = b64buf(b64), iv = raw.slice(0,12), data = raw.slice(12);
+      const pt = await crypto.subtle.decrypt({name:'AES-GCM', iv}, KEY, data);
+      return dec.decode(pt);
+    }
+    async function tryUnlock(pw){
+      KEY = await deriveKey(pw);
+      const r = await fetch('README.md?_=' + Date.now(), {cache:'no-store'});
+      await decryptText(await r.text());   // 口令错会抛异常
+    }
+    function boot(){
+      window.$docsify = {
+        name:'🔒 知识库', loadSidebar:true, subMaxLevel:2, auto2top:true,
+        copyCode:{ buttonText:'复制', successText:'已复制' },
+        plugins:[ function(hook){
+          hook.beforeEach(function(content, next){
+            decryptText(content).then(function(md){ next(md); })
+              .catch(function(){ next('# 🔒 解密失败\n\n该内容无法用当前口令解密。'); });
+          });
+        }]
+      };
+      const scripts = ['assets/docsify.min.js','assets/copy-code.min.js',
+        'assets/prism-python.min.js','assets/prism-cpp.min.js','assets/prism-cpp2.min.js','assets/prism-bash.min.js'];
+      (function next(i){ if(i>=scripts.length) return;
+        const s=document.createElement('script'); s.src=scripts[i];
+        s.onload=function(){ next(i+1); }; document.body.appendChild(s); })(0);
+    }
+    async function unlock(pw, remember){
+      await tryUnlock(pw);
+      if(remember) sessionStorage.setItem('kbpw', pw);
+      document.getElementById('gate').style.display='none';
+      boot();
+    }
+    window.addEventListener('DOMContentLoaded', async function(){
+      const saved = sessionStorage.getItem('kbpw');
+      if(saved){ try{ await unlock(saved, false); return; }catch(e){ sessionStorage.removeItem('kbpw'); } }
+      const pw=document.getElementById('pw'), go=document.getElementById('go'), err=document.getElementById('err');
+      async function submit(){ err.textContent='解锁中…';
+        try{ await unlock(pw.value, true); }catch(e){ err.textContent='口令错误'; } }
+      go.onclick=submit; pw.addEventListener('keydown', e=>{ if(e.key==='Enter') submit(); });
+    });
+  </script>
+</body>
+</html>
